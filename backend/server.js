@@ -24,20 +24,25 @@ app.use(express.json());
 // ========== ÉTAT ==========
 let currentState = { locked: true, source: 'system' };
 
-// ========== VÉRIFICATION DB ==========
+// ========== CONNEXION TiDB AVEC SSL ==========
 const db = mysql.createConnection({
     host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 3306,
+    port: process.env.DB_PORT || 4000,
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'smart_lock'
+    database: process.env.DB_NAME || 'smart_lock',
+    ssl: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true
+    }
 });
 
 db.connect((err) => {
     if (err) {
         console.log('⚠️ DB non connectée, mode démo');
+        console.log('📌 Erreur détaillée:', err.message);
     } else {
-        console.log('✅ Connecté à la DB');
+        console.log('✅ Connecté à TiDB Cloud avec SSL');
     }
 });
 
@@ -45,16 +50,13 @@ db.connect((err) => {
 io.on('connection', (socket) => {
     console.log('✅ Client WS connecté:', socket.id);
     
-    // Envoyer l'état actuel
     socket.emit('state', currentState);
     
-    // Écouter les commandes toggle
     socket.on('toggle', (data) => {
         console.log('📱 Commande toggle:', data);
         currentState = { locked: data.locked, source: data.source };
         io.emit('state', currentState);
         
-        // Auto-déverrouillage (optionnel)
         if (!data.locked) {
             setTimeout(() => {
                 if (!currentState.locked) {
@@ -80,12 +82,10 @@ app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
     console.log('🔑 PIN reçu:', pin);
     
-    // Mode démo (si DB non connectée)
     if (pin === '1234') {
         currentState = { locked: false, source: 'api' };
         io.emit('state', currentState);
         
-        // Auto-verrouillage après 5s
         setTimeout(() => {
             if (!currentState.locked) {
                 currentState = { locked: true, source: 'auto' };
@@ -96,7 +96,6 @@ app.post('/api/verify', (req, res) => {
         res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
     } 
     else if (db.state === 'authenticated') {
-        // Vérification DB
         db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
             if (err || results.length === 0) {
                 res.json({ success: false, message: '❌ Code incorrect' });
