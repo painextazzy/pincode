@@ -42,7 +42,7 @@ const PinPad = () => {
     const remoteLock = () => {
         if (socket) {
             socket.emit('toggle', { locked: true, source: 'frontend' });
-            setMessage('🔒 Serrure verrouillée');
+            setMessage(' Serrure verrouillée');
             setMessageType('success');
             setTimeout(() => setMessage(''), 2000);
         }
@@ -140,7 +140,7 @@ const PinPad = () => {
             {!isLocked && (
                 <button onClick={remoteLock}
                     className="mt-8 px-6 py-3 bg-red-500/20 text-red-400 rounded-xl border border-red-500/30 hover:bg-red-500/30 transition-all">
-                    🔒 Verrouiller maintenant
+                     Verrouiller maintenant
                 </button>
             )}
 

@@ -48,7 +48,7 @@ db.connect((err) => {
 
 // ========== WEBSOCKET ==========
 io.on('connection', (socket) => {
-    console.log('✅ Client WS connecté:', socket.id);
+    console.log(' Client WS connecté:', socket.id);
     
     socket.emit('state', currentState);
     
@@ -59,7 +59,7 @@ io.on('connection', (socket) => {
     });
     
     socket.on('disconnect', () => {
-        console.log('❌ Client déconnecté:', socket.id);
+        console.log(' Client déconnecté:', socket.id);
     });
 });
 
@@ -76,21 +76,21 @@ app.post('/api/verify', (req, res) => {
     if (pin === '1234') {
         currentState = { locked: false, source: 'api' };
         io.emit('state', currentState);
-        res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
+        res.json({ success: true, message: 'Accès autorisé', user: 'Admin' });
     } 
     else if (db.state === 'authenticated') {
         db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
             if (err || results.length === 0) {
-                res.json({ success: false, message: '❌ Code incorrect' });
+                res.json({ success: false, message: ' Code incorrect' });
             } else {
                 currentState = { locked: false, source: 'api' };
                 io.emit('state', currentState);
-                res.json({ success: true, message: '✅ Accès autorisé', user: results[0].name });
+                res.json({ success: true, message: ' Accès autorisé', user: results[0].name });
             }
         });
     } 
     else {
-        res.json({ success: false, message: '❌ Code incorrect' });
+        res.json({ success: false, message: ' Code incorrect' });
     }
 });
 
