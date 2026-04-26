@@ -23,8 +23,9 @@ app.use(express.json());
 
 // ========== ÉTAT ==========
 let currentState = { locked: true, source: 'system' };
+let autoLockTimeout = null;
 
-// ========== CONNEXION TiDB AVEC SSL ==========
+// ========== CONNEXION TiDB ==========
 const db = mysql.createConnection({
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT || 4000,
@@ -40,7 +41,7 @@ const db = mysql.createConnection({
 db.connect((err) => {
     if (err) {
         console.log('⚠️ DB non connectée, mode démo');
-        console.log('📌 Erreur détaillée:', err.message);
+        console.log('📌 Erreur:', err.message);
     } else {
         console.log('✅ Connecté à TiDB Cloud avec SSL');
     }
@@ -50,19 +51,31 @@ db.connect((err) => {
 io.on('connection', (socket) => {
     console.log('✅ Client WS connecté:', socket.id);
     
+    // Envoyer l'état actuel
     socket.emit('state', currentState);
     
+    // Écouter les commandes toggle
     socket.on('toggle', (data) => {
         console.log('📱 Commande toggle:', data);
+        
+        // Annuler l'auto-verrouillage si l'utilisateur verrouille
+        if (data.locked && autoLockTimeout) {
+            clearTimeout(autoLockTimeout);
+            autoLockTimeout = null;
+        }
+        
         currentState = { locked: data.locked, source: data.source };
         io.emit('state', currentState);
         
+        // Auto-verrouillage après 5s si déverrouillé
         if (!data.locked) {
-            setTimeout(() => {
+            if (autoLockTimeout) clearTimeout(autoLockTimeout);
+            autoLockTimeout = setTimeout(() => {
                 if (!currentState.locked) {
                     currentState = { locked: true, source: 'auto' };
                     io.emit('state', currentState);
                     console.log('🔒 Auto-verrouillage');
+                    autoLockTimeout = null;
                 }
             }, 5000);
         }
@@ -78,26 +91,57 @@ app.get('/api/state', (req, res) => {
     res.json(currentState);
 });
 
-// Supprimez simplement tous les setTimeout
 app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
+    console.log('🔑 PIN reçu:', pin);
     
+    // Annuler l'auto-verrouillage précédent
+    if (autoLockTimeout) {
+        clearTimeout(autoLockTimeout);
+        autoLockTimeout = null;
+    }
+    
+    // Mode démo (PIN 1234)
     if (pin === '1234') {
         currentState = { locked: false, source: 'api' };
         io.emit('state', currentState);
-        // PAS de setTimeout
+        
+        // Auto-verrouillage après 5s
+        autoLockTimeout = setTimeout(() => {
+            if (!currentState.locked) {
+                currentState = { locked: true, source: 'auto' };
+                io.emit('state', currentState);
+                console.log('🔒 Auto-verrouillage');
+                autoLockTimeout = null;
+            }
+        }, 5000);
+        
         res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
+    } 
+    else if (db.state === 'authenticated') {
+        db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
+            if (err || results.length === 0) {
+                res.json({ success: false, message: '❌ Code incorrect' });
+            } else {
+                currentState = { locked: false, source: 'api' };
+                io.emit('state', currentState);
+                
+                autoLockTimeout = setTimeout(() => {
+                    if (!currentState.locked) {
+                        currentState = { locked: true, source: 'auto' };
+                        io.emit('state', currentState);
+                        console.log('🔒 Auto-verrouillage');
+                        autoLockTimeout = null;
+                    }
+                }, 5000);
+                
+                res.json({ success: true, message: '✅ Accès autorisé', user: results[0].name });
+            }
+        });
     } 
     else {
         res.json({ success: false, message: '❌ Code incorrect' });
     }
-});
-
-// Dans le WebSocket
-socket.on('toggle', (data) => {
-    currentState = { locked: data.locked, source: data.source };
-    io.emit('state', currentState);
-    // PAS de setTimeout
 });
 
 app.get('/health', (req, res) => {
