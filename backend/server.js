@@ -2,72 +2,120 @@
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
+const http = require('http');
+const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Configuration pour TiDB Cloud avec SSL/TLS
+// Configuration TiDB
 const db = mysql.createConnection({
-    host: process.env.DB_HOST ,
-    port: process.env.DB_PORT ,
-    user: process.env.DB_USER ,
-    password: process.env.DB_PASSWORD ,
-    database: process.env.DB_NAME ,
+    host: process.env.DB_HOST || 'gateway01.us-east-1.prod.aws.tidbcloud.com',
+    port: process.env.DB_PORT || 4000,
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'smart_lock',
     ssl: {
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true
     }
 });
 
-// Connecter à TiDB
 db.connect((err) => {
     if (err) {
         console.error('❌ Erreur de connexion TiDB:', err.message);
-        console.log('💡 Vérifiez vos variables d\'environnement');
         process.exit(1);
     }
     console.log('✅ Connecté à TiDB Cloud');
 });
 
-// ============ ENDPOINTS ANTI-SOMMEIL ============
+// ============ WebSocket ============
+let currentLockState = {
+    locked: true,
+    lastUpdated: new Date().toISOString(),
+    source: 'system'
+};
 
-// Endpoint racine (pour éviter 404)
+// Clients connectés
+const connectedClients = new Set();
+
+io.on('connection', (socket) => {
+    console.log('✅ Client connecté:', socket.id);
+    connectedClients.add(socket.id);
+    
+    // Envoyer l'état actuel au nouveau client
+    socket.emit('lockState', currentLockState);
+    
+    // Client demande à verrouiller/déverrouiller
+    socket.on('toggleLock', async (data) => {
+        console.log('📱 Commande reçue:', data);
+        
+        const { action, source } = data;
+        
+        if (action === 'unlock') {
+            currentLockState = {
+                locked: false,
+                lastUpdated: new Date().toISOString(),
+                source: source || 'websocket'
+            };
+            
+            // Auto-verrouillage après 5 secondes
+            setTimeout(() => {
+                currentLockState = {
+                    locked: true,
+                    lastUpdated: new Date().toISOString(),
+                    source: 'auto'
+                };
+                broadcastState();
+                console.log('🔒 Auto-verrouillage');
+            }, 5000);
+        } 
+        else if (action === 'lock') {
+            currentLockState = {
+                locked: true,
+                lastUpdated: new Date().toISOString(),
+                source: source || 'websocket'
+            };
+        }
+        
+        broadcastState();
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('❌ Client déconnecté:', socket.id);
+        connectedClients.delete(socket.id);
+    });
+});
+
+function broadcastState() {
+    io.emit('lockState', currentLockState);
+}
+
+// ============ API REST ============
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
-        message: 'Smart Lock API is running',
+        websocket: true,
+        clients: connectedClients.size,
         endpoints: {
-            health: 'GET /health',
-            verify: 'POST /api/verify',
-            keepAlive: 'GET /ping'
-        },
-        timestamp: new Date().toISOString()
+            verify: 'POST /api/verify'
+        }
     });
 });
 
-// Endpoint simple pour ping (anti-sommeil)
-app.get('/ping', (req, res) => {
-    res.status(200).send('pong');
-});
-
-// Health check complet
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'ok',
-        database: 'TiDB Cloud',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-    });
-});
-
-// ============ ENDPOINTS PRINCIPAUX ============
-
-// Vérification du PIN
 app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
     
@@ -90,6 +138,24 @@ app.post('/api/verify', (req, res) => {
         }
         
         if (results.length > 0) {
+            // Déverrouiller via WebSocket
+            currentLockState = {
+                locked: false,
+                lastUpdated: new Date().toISOString(),
+                source: 'api'
+            };
+            broadcastState();
+            
+            // Auto-verrouillage après 5 secondes
+            setTimeout(() => {
+                currentLockState = {
+                    locked: true,
+                    lastUpdated: new Date().toISOString(),
+                    source: 'auto'
+                };
+                broadcastState();
+            }, 5000);
+            
             res.json({
                 success: true,
                 message: '✅ Accès autorisé',
@@ -104,12 +170,7 @@ app.post('/api/verify', (req, res) => {
     });
 });
 
-// Démarrer le serveur
-app.listen(PORT, () => {
-    console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-    console.log(`📡 Endpoints disponibles:`);
-    console.log(`   GET  /        - Informations API`);
-    console.log(`   GET  /ping    - Anti-sommeil`);
-    console.log(`   GET  /health  - Health check`);
-    console.log(`   POST /api/verify - Vérification PIN`);
+server.listen(PORT, () => {
+    console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket prêt`);
 });
