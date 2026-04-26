@@ -2,11 +2,9 @@
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
-require('dotenv').config();  // Important: charger .env
+require('dotenv').config();
 
 const app = express();
-
-// Utiliser les variables d'environnement
 const PORT = process.env.PORT || 3000;
 
 // Middleware
@@ -15,28 +13,61 @@ app.use(express.json());
 
 // Configuration pour TiDB Cloud avec SSL/TLS
 const db = mysql.createConnection({
-    host: process.env.DB_HOST || 'gateway01.us-east-1.prod.aws.tidbcloud.com',
-    port: process.env.DB_PORT || 4000,
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'smart_lock',
+    host: process.env.DB_HOST ,
+    port: process.env.DB_PORT ,
+    user: process.env.DB_USER ,
+    password: process.env.DB_PASSWORD ,
+    database: process.env.DB_NAME ,
     ssl: {
         minVersion: 'TLSv1.2',
-        rejectUnauthorized: true // Important pour la sécurité
+        rejectUnauthorized: true
     }
 });
 
-// Connecter à MySQL
+// Connecter à TiDB
 db.connect((err) => {
     if (err) {
-        console.error('❌ Erreur de connexion MySQL:', err.message);
-        console.log('💡 Vérifiez votre fichier .env');
+        console.error('❌ Erreur de connexion TiDB:', err.message);
+        console.log('💡 Vérifiez vos variables d\'environnement');
         process.exit(1);
     }
-    console.log('✅ Connecté à MySQL sur', process.env.DB_HOST);
+    console.log('✅ Connecté à TiDB Cloud');
 });
 
-// Endpoint de vérification
+// ============ ENDPOINTS ANTI-SOMMEIL ============
+
+// Endpoint racine (pour éviter 404)
+app.get('/', (req, res) => {
+    res.json({
+        status: 'online',
+        message: 'Smart Lock API is running',
+        endpoints: {
+            health: 'GET /health',
+            verify: 'POST /api/verify',
+            keepAlive: 'GET /ping'
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Endpoint simple pour ping (anti-sommeil)
+app.get('/ping', (req, res) => {
+    res.status(200).send('pong');
+});
+
+// Health check complet
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        database: 'TiDB Cloud',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ============ ENDPOINTS PRINCIPAUX ============
+
+// Vérification du PIN
 app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
     
@@ -61,13 +92,13 @@ app.post('/api/verify', (req, res) => {
         if (results.length > 0) {
             res.json({
                 success: true,
-                message: ' Accès autorisé',
+                message: '✅ Accès autorisé',
                 user: results[0].name
             });
         } else {
             res.json({
                 success: false,
-                message: ' Code incorrect'
+                message: '❌ Code incorrect'
             });
         }
     });
@@ -75,7 +106,10 @@ app.post('/api/verify', (req, res) => {
 
 // Démarrer le serveur
 app.listen(PORT, () => {
-    
-    console.log(`📡 Endpoint: POST /api/verify`);
-    console.log(`📊 Base de données: ${process.env.DB_NAME}`);
+    console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+    console.log(`📡 Endpoints disponibles:`);
+    console.log(`   GET  /        - Informations API`);
+    console.log(`   GET  /ping    - Anti-sommeil`);
+    console.log(`   GET  /health  - Health check`);
+    console.log(`   POST /api/verify - Vérification PIN`);
 });
