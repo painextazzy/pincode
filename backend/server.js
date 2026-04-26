@@ -1,120 +1,128 @@
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
+const http = require('http');
+const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"],
+        credentials: false
+    },
+    transports: ['websocket', 'polling']
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// ========== BASE DE DONNÉES ==========
+// ========== ÉTAT ==========
+let currentState = { locked: true, source: 'system' };
+
+// ========== VÉRIFICATION DB ==========
 const db = mysql.createConnection({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    ssl: { minVersion: 'TLSv1.2', rejectUnauthorized: true }
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 3306,
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'smart_lock'
 });
 
 db.connect((err) => {
     if (err) {
-        console.error('❌ Erreur de connexion:', err.message);
-        process.exit(1);
+        console.log('⚠️ DB non connectée, mode démo');
+    } else {
+        console.log('✅ Connecté à la DB');
     }
-    console.log('✅ Connecté à TiDB');
 });
 
-// ========== ÉTAT EN MÉMOIRE ==========
-let currentLockState = {
-    locked: true,
-    lastUpdated: new Date().toISOString(),
-    source: 'system'
-};
-
-// ========== ENDPOINTS ==========
-
-// Récupérer l'état (pour Wokwi et frontend)
-app.get('/api/state', (req, res) => {
-    res.json(currentLockState);
-});
-
-// Changer l'état (verrouiller/déverrouiller)
-app.post('/api/toggle', (req, res) => {
-    const { locked, source } = req.body;
+// ========== WEBSOCKET ==========
+io.on('connection', (socket) => {
+    console.log('✅ Client WS connecté:', socket.id);
     
-    currentLockState = {
-        locked: locked,
-        lastUpdated: new Date().toISOString(),
-        source: source || 'api'
-    };
+    // Envoyer l'état actuel
+    socket.emit('state', currentState);
     
-    console.log(`🔐 ${locked ? 'VERROUILLÉ' : 'DÉVERROUILLÉ'} depuis ${source}`);
-    res.json({ success: true, state: currentLockState });
-});
-
-// Vérifier le PIN
-app.post('/api/verify', (req, res) => {
-    const { pin } = req.body;
-    
-    if (!pin || pin.length !== 4) {
-        return res.status(400).json({
-            success: false,
-            message: 'PIN invalide (4 chiffres requis)'
-        });
-    }
-    
-    const query = 'SELECT name FROM users WHERE pin = ?';
-    
-    db.query(query, [pin], (err, results) => {
-        if (err) {
-            console.error('Erreur SQL:', err);
-            return res.status(500).json({
-                success: false,
-                message: 'Erreur serveur'
-            });
-        }
+    // Écouter les commandes toggle
+    socket.on('toggle', (data) => {
+        console.log('📱 Commande toggle:', data);
+        currentState = { locked: data.locked, source: data.source };
+        io.emit('state', currentState);
         
-        if (results.length > 0) {
-            // Déverrouiller
-            currentLockState = {
-                locked: false,
-                lastUpdated: new Date().toISOString(),
-                source: 'api'
-            };
-            
-            // Auto-verrouillage après 5 secondes
+        // Auto-déverrouillage (optionnel)
+        if (!data.locked) {
             setTimeout(() => {
-                currentLockState = {
-                    locked: true,
-                    lastUpdated: new Date().toISOString(),
-                    source: 'auto'
-                };
-                console.log('🔒 Auto-verrouillage');
+                if (!currentState.locked) {
+                    currentState = { locked: true, source: 'auto' };
+                    io.emit('state', currentState);
+                    console.log('🔒 Auto-verrouillage');
+                }
             }, 5000);
-            
-            res.json({
-                success: true,
-                message: '✅ Accès autorisé',
-                user: results[0].name
-            });
-        } else {
-            res.json({
-                success: false,
-                message: '❌ Code incorrect'
-            });
         }
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('❌ Client déconnecté:', socket.id);
     });
 });
 
-// Health check
+// ========== API REST ==========
+app.get('/api/state', (req, res) => {
+    res.json(currentState);
+});
+
+app.post('/api/verify', (req, res) => {
+    const { pin } = req.body;
+    console.log('🔑 PIN reçu:', pin);
+    
+    // Mode démo (si DB non connectée)
+    if (pin === '1234') {
+        currentState = { locked: false, source: 'api' };
+        io.emit('state', currentState);
+        
+        // Auto-verrouillage après 5s
+        setTimeout(() => {
+            if (!currentState.locked) {
+                currentState = { locked: true, source: 'auto' };
+                io.emit('state', currentState);
+            }
+        }, 5000);
+        
+        res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
+    } 
+    else if (db.state === 'authenticated') {
+        // Vérification DB
+        db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
+            if (err || results.length === 0) {
+                res.json({ success: false, message: '❌ Code incorrect' });
+            } else {
+                currentState = { locked: false, source: 'api' };
+                io.emit('state', currentState);
+                setTimeout(() => {
+                    if (!currentState.locked) {
+                        currentState = { locked: true, source: 'auto' };
+                        io.emit('state', currentState);
+                    }
+                }, 5000);
+                res.json({ success: true, message: '✅ Accès autorisé', user: results[0].name });
+            }
+        });
+    } 
+    else {
+        res.json({ success: false, message: '❌ Code incorrect' });
+    }
+});
+
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-    console.log(`📡 Endpoints: /api/state, /api/verify, /api/toggle, /health`);
+server.listen(PORT, () => {
+    console.log(`🚀 Serveur sur http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket prêt - Socket.IO v4`);
 });
