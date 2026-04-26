@@ -78,43 +78,26 @@ app.get('/api/state', (req, res) => {
     res.json(currentState);
 });
 
+// Supprimez simplement tous les setTimeout
 app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
-    console.log('🔑 PIN reçu:', pin);
     
     if (pin === '1234') {
         currentState = { locked: false, source: 'api' };
         io.emit('state', currentState);
-        
-        setTimeout(() => {
-            if (!currentState.locked) {
-                currentState = { locked: true, source: 'auto' };
-                io.emit('state', currentState);
-            }
-        }, 5000);
-        
+        // PAS de setTimeout
         res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
-    } 
-    else if (db.state === 'authenticated') {
-        db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
-            if (err || results.length === 0) {
-                res.json({ success: false, message: '❌ Code incorrect' });
-            } else {
-                currentState = { locked: false, source: 'api' };
-                io.emit('state', currentState);
-                setTimeout(() => {
-                    if (!currentState.locked) {
-                        currentState = { locked: true, source: 'auto' };
-                        io.emit('state', currentState);
-                    }
-                }, 5000);
-                res.json({ success: true, message: '✅ Accès autorisé', user: results[0].name });
-            }
-        });
     } 
     else {
         res.json({ success: false, message: '❌ Code incorrect' });
     }
+});
+
+// Dans le WebSocket
+socket.on('toggle', (data) => {
+    currentState = { locked: data.locked, source: data.source };
+    io.emit('state', currentState);
+    // PAS de setTimeout
 });
 
 app.get('/health', (req, res) => {
