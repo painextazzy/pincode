@@ -6,8 +6,8 @@ require('dotenv').config();  // Important: charger .env
 
 const app = express();
 
-// Utiliser les variables d'environnement
-const PORT = process.env.PORT || 3000;
+
+
 
 // Middleware
 app.use(cors());
@@ -71,7 +71,7 @@ app.post('/api/verify', (req, res) => {
 
 // Démarrer le serveur
 app.listen(PORT, () => {
-    console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
+    
     console.log(`📡 Endpoint: POST /api/verify`);
     console.log(`📊 Base de données: ${process.env.DB_NAME}`);
 });
