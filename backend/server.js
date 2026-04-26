@@ -13,13 +13,17 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Configuration MySQL avec variables d'environnement
+// Configuration pour TiDB Cloud avec SSL/TLS
 const db = mysql.createConnection({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
+    host: process.env.DB_HOST || 'gateway01.us-east-1.prod.aws.tidbcloud.com',
+    port: process.env.DB_PORT || 4000,
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'smart_lock',
+    ssl: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true // Important pour la sécurité
+    }
 });
 
 // Connecter à MySQL
