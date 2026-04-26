@@ -23,7 +23,6 @@ app.use(express.json());
 
 // ========== ÉTAT ==========
 let currentState = { locked: true, source: 'system' };
-let autoLockTimeout = null;
 
 // ========== CONNEXION TiDB ==========
 const db = mysql.createConnection({
@@ -51,34 +50,12 @@ db.connect((err) => {
 io.on('connection', (socket) => {
     console.log('✅ Client WS connecté:', socket.id);
     
-    // Envoyer l'état actuel
     socket.emit('state', currentState);
     
-    // Écouter les commandes toggle
     socket.on('toggle', (data) => {
         console.log('📱 Commande toggle:', data);
-        
-        // Annuler l'auto-verrouillage si l'utilisateur verrouille
-        if (data.locked && autoLockTimeout) {
-            clearTimeout(autoLockTimeout);
-            autoLockTimeout = null;
-        }
-        
         currentState = { locked: data.locked, source: data.source };
         io.emit('state', currentState);
-        
-        // Auto-verrouillage après 5s si déverrouillé
-        if (!data.locked) {
-            if (autoLockTimeout) clearTimeout(autoLockTimeout);
-            autoLockTimeout = setTimeout(() => {
-                if (!currentState.locked) {
-                    currentState = { locked: true, source: 'auto' };
-                    io.emit('state', currentState);
-                    console.log('🔒 Auto-verrouillage');
-                    autoLockTimeout = null;
-                }
-            }, 5000);
-        }
     });
     
     socket.on('disconnect', () => {
@@ -95,27 +72,10 @@ app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
     console.log('🔑 PIN reçu:', pin);
     
-    // Annuler l'auto-verrouillage précédent
-    if (autoLockTimeout) {
-        clearTimeout(autoLockTimeout);
-        autoLockTimeout = null;
-    }
-    
     // Mode démo (PIN 1234)
     if (pin === '1234') {
         currentState = { locked: false, source: 'api' };
         io.emit('state', currentState);
-        
-        // Auto-verrouillage après 5s
-        autoLockTimeout = setTimeout(() => {
-            if (!currentState.locked) {
-                currentState = { locked: true, source: 'auto' };
-                io.emit('state', currentState);
-                console.log('🔒 Auto-verrouillage');
-                autoLockTimeout = null;
-            }
-        }, 5000);
-        
         res.json({ success: true, message: '✅ Accès autorisé', user: 'Admin' });
     } 
     else if (db.state === 'authenticated') {
@@ -125,16 +85,6 @@ app.post('/api/verify', (req, res) => {
             } else {
                 currentState = { locked: false, source: 'api' };
                 io.emit('state', currentState);
-                
-                autoLockTimeout = setTimeout(() => {
-                    if (!currentState.locked) {
-                        currentState = { locked: true, source: 'auto' };
-                        io.emit('state', currentState);
-                        console.log('🔒 Auto-verrouillage');
-                        autoLockTimeout = null;
-                    }
-                }, 5000);
-                
                 res.json({ success: true, message: '✅ Accès autorisé', user: results[0].name });
             }
         });
