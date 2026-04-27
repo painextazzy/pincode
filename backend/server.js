@@ -2,19 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
 const http = require('http');
-const socketIo = require('socket.io');
+const WebSocket = require('ws');
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
-        credentials: false
-    },
-    transports: ['websocket', 'polling']
-});
+const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 
@@ -24,7 +17,7 @@ app.use(express.json());
 // ========== ÉTAT ==========
 let currentState = { locked: true, source: 'system' };
 
-// ========== CONNEXION TiDB (OBLIGATOIRE) ==========
+// ========== DB ==========
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT || 4000,
@@ -37,91 +30,96 @@ const db = mysql.createConnection({
     }
 });
 
-// CONNEXION - Si erreur, le serveur ne démarre pas
 db.connect((err) => {
     if (err) {
-        console.error('❌ ERREUR FATALE: Connexion DB impossible');
-        console.error('📌 Erreur:', err.message);
-        console.error('📌 Vérifiez vos variables DB dans Render:');
-        console.error('   - DB_HOST');
-        console.error('   - DB_USER');
-        console.error('   - DB_PASSWORD');
-        console.error('   - DB_NAME');
-        process.exit(1); // Arrête le serveur si DB non connectée
+        console.error('❌ DB error:', err.message);
+        process.exit(1);
     }
-    console.log('✅ Connecté à TiDB Cloud avec SSL');
+    console.log('✅ DB connectée');
 });
 
-// ========== WEBSOCKET ==========
-io.on('connection', (socket) => {
-    console.log('✅ Client WS connecté:', socket.id);
-    socket.emit('state', currentState);
-    
-    socket.on('toggle', (data) => {
-        console.log('📱 Commande toggle:', data);
-        currentState = { locked: data.locked, source: data.source };
-        io.emit('state', currentState);
+// ========== WEBSOCKET PUR ==========
+wss.on('connection', (ws) => {
+    console.log('✅ Client WS connecté');
+
+    // envoyer état actuel
+    ws.send(JSON.stringify({
+        type: 'state',
+        data: currentState
+    }));
+
+    ws.on('message', (message) => {
+        try {
+            const msg = JSON.parse(message);
+
+            if (msg.type === 'toggle') {
+                currentState = {
+                    locked: msg.locked,
+                    source: msg.source || 'unknown'
+                };
+
+                // broadcast à tous
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({
+                            type: 'state',
+                            data: currentState
+                        }));
+                    }
+                });
+            }
+
+        } catch (e) {
+            console.log('❌ JSON error');
+        }
     });
-    
-    socket.on('disconnect', () => {
-        console.log('❌ Client déconnecté:', socket.id);
+
+    ws.on('close', () => {
+        console.log('❌ Client déconnecté');
     });
 });
 
-// ========== API REST ==========
+// ========== API ==========
 app.get('/api/state', (req, res) => {
     res.json(currentState);
 });
 
-// Vérification du PIN dans la base de données
 app.post('/api/verify', (req, res) => {
     const { pin } = req.body;
-    console.log('🔑 PIN reçu:', pin);
-    
+
     if (!pin || pin.length !== 4) {
-        return res.status(400).json({
-            success: false,
-            message: 'PIN invalide (4 chiffres requis)'
-        });
+        return res.status(400).json({ success: false });
     }
-    
-    // Requête vers la base TiDB
-    db.query('SELECT name, pin FROM users WHERE pin = ?', [pin], (err, results) => {
+
+    db.query('SELECT name FROM users WHERE pin = ?', [pin], (err, results) => {
         if (err) {
-            console.error('❌ Erreur SQL:', err.message);
-            return res.status(500).json({
-                success: false,
-                message: 'Erreur serveur'
-            });
+            return res.status(500).json({ success: false });
         }
-        
+
         if (results.length > 0) {
-            // PIN trouvé en base
-            console.log(`✅ Accès autorisé pour: ${results[0].name}`);
             currentState = { locked: false, source: 'api' };
-            io.emit('state', currentState);
-            
-            res.json({
-                success: true,
-                message: '✅ Accès autorisé',
-                user: results[0].name
+
+            // broadcast unlock
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        type: 'state',
+                        data: currentState
+                    }));
+                }
             });
+
+            res.json({ success: true });
         } else {
-            // PIN non trouvé
-            console.log(`❌ Code incorrect: ${pin}`);
-            res.json({
-                success: false,
-                message: '❌ Code incorrect'
-            });
+            res.json({ success: false });
         }
     });
 });
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok' });
 });
 
 server.listen(PORT, () => {
-    console.log(`🚀 Serveur sur http://localhost:${PORT}`);
-    console.log(`🔌 WebSocket prêt - Socket.IO v4`);
+    console.log(`🚀 Server ${PORT}`);
 });
